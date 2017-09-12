@@ -53,7 +53,7 @@ root.columnconfigure(0, weight=1)
 root.rowconfigure(0, weight=1)
 
 app = Application(master=root)
-app.master.title("My Do-Nothing Application")
+app.master.title("Visu")
 app.master.minsize(1000, 1000)
 
 p = pyaudio.PyAudio()

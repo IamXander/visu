@@ -3,6 +3,7 @@ import time
 import numpy as np
 import tkinter as tk
 from copy import copy, deepcopy
+from collections import deque
 
 WIDTH = 2
 CHANNELS = 2
@@ -27,7 +28,7 @@ LED_VV_DIM = 10
 LED_OFF = 0
 
 SWITCH_TIME = 200
-SHOW_DURATION = 500
+SHOW_DURATION = 700
 
 import bibliopixel
 from bibliopixel.drivers.serial import *
@@ -46,10 +47,20 @@ class Application(tk.Frame):
         self.numLeds = 60*4
         driver = Serial(num = self.numLeds, ledtype = LEDTYPE.WS2812B)
         self.led = Strip(driver)
-        self.plan = 1
+        self.plan = 0
         self.fadeToNextPlan = 0
-        self.ledsPerBucket = int(self.numLeds/(len(BUCKET_SPLITS) - 1))
+        # self.ledsPerBucket = int(self.numLeds/(len(BUCKET_SPLITS) - 1))
         self.allpoints = [[0,0,0] for i in range(self.numLeds)]
+        self.dq = deque([0],maxlen=int(RATE / FRAMES))
+        self.chunkedRainbow = [[0, 255, 0], [165, 255, 0], [255, 255, 0], [255, 0, 0], [0, 0, 255], [0, 75, 130], [0, 139, 255]]
+        self.rainbow = [[0, 0, 0]] * self.numLeds
+        rainbowIdx = 0
+        for i in range(len(self.chunkedRainbow)-1):
+            dist = int(self.numLeds / (len(self.chunkedRainbow)-1))
+            delta = [(self.chunkedRainbow[i+1][j] - self.chunkedRainbow[i][j])/dist for j in range(3)]
+            for q in range(dist):
+                self.rainbow[rainbowIdx] = [self.chunkedRainbow[i][j] + (delta[j]*q) for j in range(3)]
+                rainbowIdx += 1
         self.reset()
 
     def create_widgets(self):
@@ -62,19 +73,20 @@ class Application(tk.Frame):
         self.quit = tk.Button(self, text="QUIT", fg="red", command=root.destroy)
         self.quit.pack(side="bottom")
 
-    def drawMonoBars(self, bars):
+    def drawDualBars(self, leftAudio, rightAudio, leftBars, rightBars):
+        isBeat = False
+        enew = np.sum(np.square(leftAudio)) + np.sum(np.square(rightAudio))
+        if enew > 1.5 * np.average(self.dq):
+            isBeat = True
+            self.dq.clear()
+        self.dq.append(enew)
+        self.visu(leftAudio, rightAudio, leftBars, rightBars, isBeat)
         for i in range(len(self.bars)):
-            self.cvs.coords(self.bars[i], 0, 100*i, bars[i], 100*(i+1))
+            self.cvs.coords(self.bars[i], 500-leftBars[i], 100*i, 500+rightBars[i], 100*(i+1))
 
-    def drawDualBars(self, left, right):
-        #print(left)
-        self.visu(left)
-        for i in range(len(self.bars)):
-            self.cvs.coords(self.bars[i], 500-left[i], 100*i, 500+right[i], 100*(i+1))
-
-    def generateBrightColor(self):
+    def generateBrightColor(self, otherColor=[0,0,0]):
         color = [0, 0, 0]
-        while color == [0, 0, 0]:
+        while color == [0, 0, 0] or color == otherColor:
             color = [random.randint(0, 1)*LED_FULL_BRIGHT, random.randint(0, 1)*LED_FULL_BRIGHT, random.randint(0, 1)*LED_FULL_BRIGHT]
         return color
 
@@ -84,10 +96,12 @@ class Application(tk.Frame):
         self.fadeToNext = False
         self.color = self.generateBrightColor()
         self.ready = True
-        self.locs = [[i*10, self.generateBrightColor()] for i in range(int(self.numLeds/10))]
+        density = random.choice([5, 10, 20])
+        self.locs = [[i*density, self.generateBrightColor()] for i in range(int(self.numLeds/density))]
         self.delta = 1
         self.maxBrightness = LED_FULL_BRIGHT
         self.fadeIntoNext = False
+        self.sections = random.choice([1, 2, 3, 4, 6])
 
     def draw(self):
         self.led.all_off()
@@ -104,7 +118,7 @@ class Application(tk.Frame):
         if i >= 0 and i < len(self.allpoints):
             self.allpoints[i] = color
 
-    def visu(self, bars):
+    def visu(self, leftAudio, rightAudio, leftBars, rightBars, isBeat):
         # if sum(bars) < 1:
         #     self.fadeToNextCounter += 1
         # elif self.fadeToNextCounter <= SWITCH_TIME and self.fadeToNext == False:
@@ -112,28 +126,32 @@ class Application(tk.Frame):
         self.fadeToNextCounter += 1
         if self.fadeToNextCounter >= SHOW_DURATION:
             self.fadeToNext = True
+        # if self.plan == 0:
+        #     if self.doShit(leftBars) == False:
+        #         self.plan = 1
+        #         self.reset()
         if self.plan == 0:
-            if self.doShit(bars) == False:
+            if self.movement(leftBars, rightBars, isBeat) == False:
                 self.plan = 1
                 self.reset()
         elif self.plan == 1:
-            if self.eyes(bars) == False:
+            if self.rainbowStars(isBeat) == False:
                 self.plan = 2
                 self.reset()
         elif self.plan == 2:
-            if self.movement(bars) == False:
+            if self.miniBars(leftBars, rightBars, isBeat) == False:
                 self.plan = 3
                 self.reset()
         elif self.plan == 3:
-            if self.megaBar(bars) == False:
+            if self.activeStars(leftBars) == False:
                 self.plan = 4
                 self.reset()
         elif self.plan == 4:
-            if self.activeStars(bars) == False:
+            if self.megaBar(leftBars, rightBars, isBeat) == False:
                 self.plan = 5
                 self.reset()
         elif self.plan == 5:
-            if self.randomStars(bars) == False:
+            if self.randomStars(leftBars) == False:
                 self.plan = 0
                 self.reset()
         # elif self.plan == 6:
@@ -202,6 +220,14 @@ class Application(tk.Frame):
             self.points.append([deepcopy(self.color), random.uniform(8, 32), random.randint(0, self.numLeds)])
         self.drawStars(self.points)
 
+    def rainbowStars(self, isBeat):
+        if isBeat:
+            speed = random.uniform(2, 4)
+            pos = random.randint(0, self.numLeds)
+            for i in range(random.randint(5, 15)):
+                self.points.append([deepcopy(self.rainbow[(pos + i) % self.numLeds]), speed, (pos + i) % self.numLeds])
+        self.drawStars(self.points)
+
     def chillStars(self):
         while len(self.points) < 15:
             self.points.append([[1, 1, 1], -random.uniform(.4, 1), random.randint(0, self.numLeds)])
@@ -214,37 +240,37 @@ class Application(tk.Frame):
         for i in range(60*4):
             self.setpointcolor(i, [bars[1]*10, bars[2]/2, bars[3]*2])
 
-    def eyes(self, bars):
+    def miniBars(self, leftBars, rightBars, isBeat):
         self.all_off()
-        if bars[1] > 50:
-            self.color = self.generateBrightColor()
-        for i in range(len(bars)):
-            for j in range(bars[i]+1):
-                self.setpointcolor(i*self.ledsPerBucket + j, deepcopy(self.color))
+        if isBeat:
+            self.color = self.generateBrightColor(self.color)
+        for i in range(3):
+            for j in range(min(leftBars[i]+1, int(self.numLeds/6))):
+                self.setpointcolor(i*int(self.numLeds/6) + j, deepcopy(self.rainbow[i*int(self.numLeds/6) + j]))
+            for j in range(min(rightBars[i]+1, int(self.numLeds/6))):
+               self.setpointcolor(self.numLeds - (i*int(self.numLeds/6)) - j - 1, deepcopy(self.rainbow[self.numLeds - (i*int(self.numLeds/6)) - j - 1]))
 
-    def movement(self, bars):
+    def movement(self, leftBars, rightBars, isBeat):
         self.all_off()
         if self.delta <= 0:
-            self.delta = -.5 - (bars[3]/20)
+            self.delta = -.5 - (leftBars[3]/20)
         else:
-            self.delta = .5 + (bars[3]/20)
-        if bars[1] > 50:
+            self.delta = .5 + (leftBars[3]/20)
+        if isBeat:
             self.delta = -self.delta
-        if bars[0] > 50:
             for i in range(len(self.locs)):
                 self.locs[i][1] = self.generateBrightColor()
-        for i in range(len(self.locs)):
-            self.locs[i][0] += self.delta
-            self.locs[i][0] = self.locs[i][0] % self.numLeds
-            if self.locs[i][0] < 0:
-                self.locs[i][0] = self.numLeds - 1
-            self.setpointcolor(int(self.locs[i][0]), deepcopy(self.locs[i][1]))
+        for j in range(self.sections):
+            for i in range(int(len(self.locs)*(j/self.sections)), int(len(self.locs)*((j+1)/self.sections))):
+                self.locs[i][0] += self.delta * ((j%2)-.5) * 2
+                self.locs[i][0] = ((self.locs[i][0]-int(self.numLeds*(j/self.sections))) % int(self.numLeds/self.sections)) + (int(self.numLeds*(j/self.sections)))
+                self.setpointcolor(int(self.locs[i][0]), deepcopy(self.locs[i][1]))
 
-    def megaBar(self, bars):
+    def megaBar(self, leftBars, rightBars, isBeat):
         self.all_off()
-        if bars[1] > 50:
-            self.color = self.generateBrightColor()
-        for i in range(int(self.numLeds / 2) - (int(bars[0])), int(self.numLeds / 2) + (int(bars[0]))):
+        if isBeat:
+            self.color = self.generateBrightColor(self.color)
+        for i in range(int(self.numLeds / 2) - (int(max(leftBars[0], leftBars[1]))), int(self.numLeds / 2) + (int(max(rightBars[0], rightBars[1])))):
             self.setpointcolor(i, deepcopy(self.color))
 
     def printBars(self, bars):
@@ -269,14 +295,14 @@ def callback(in_data, frame_count, time_info, status):
     #print(frame_count)
     #print(in_data)
     data = np.fromstring(in_data, dtype=np.int16)/WAVE_ABS_MAX #Normalize data
-    dataEven = (data[::2])
-    dataOdd = (data[1::2])
+    dataEven = (data[::2]) #Right
+    dataOdd = (data[1::2]) #Left
     specEven = abs(np.fft.rfft(dataEven))
     specOdd = abs(np.fft.rfft(dataOdd))
 
     barsEven = np.asarray([int(np.max(specEven[BUCKET_SPLITS_LOCS[i]:BUCKET_SPLITS_LOCS[i+1]])) for i in range(len(BUCKET_SPLITS_LOCS)-1)])
     barsOdd = np.asarray([int(np.max(specOdd[BUCKET_SPLITS_LOCS[i]:BUCKET_SPLITS_LOCS[i+1]])) for i in range(len(BUCKET_SPLITS_LOCS)-1)])
-    app.drawDualBars(barsEven, barsOdd)
+    app.drawDualBars(dataEven, dataOdd, barsEven, barsOdd)
     #return (in_data, pyaudio.paComplete)
     return (in_data, pyaudio.paContinue)
 

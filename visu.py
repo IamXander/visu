@@ -6,22 +6,33 @@ from copy import copy, deepcopy
 from collections import deque
 import time
 import random
+import math
 import bibliopixel
 from bibliopixel.drivers.serial import *
 from bibliopixel.layout import *
 from visu_util import *
+from fakeLed import *
+
+VOLUME = 2
 
 class VisuFunctions():
 	def __init__(self):
-		driver = Serial(num = leds.numLeds, ledtype = LEDTYPE.WS2812B)
-		self.led = Strip(driver)
-		self.plan = 0
+		try:
+			driver = Serial(num = leds.numLeds, ledtype = LEDTYPE.WS2812B)
+			self.led = Strip(driver)
+		except ValueError:
+			print("NO LEDS FOUND")
+			self.led = FakeLed()
+		self.plan = 1
+		self.silentPlan = 1
 		self.fadeToNextPlan = 0
 		# self.ledsPerBucket = int(leds.numLeds/(len(BUCKET_SPLITS) - 1))
 		self.allpoints = [[0,0,0] for i in range(leds.numLeds)]
 		self.dq = deque([0], maxlen=int(fft.RATE / fft.FRAMES))
 		self.functionList = [self.waves, self.activeStars, self.miniBars, self.randomStars, self.megaBar, self.rainbowStars, self.movement]
+		self.silentList = [self.chillStars, self.pulsatingRainbow, self.pong]
 		self.beatPause = 0
+		self.frozen = False
 		self.reset()
 
 	def reset(self):
@@ -36,6 +47,8 @@ class VisuFunctions():
 		self.maxBrightness = led_brightness.LED_FULL_BRIGHT
 		self.fadeIntoNext = False
 		self.sections = random.choice([1, 2, 3, 4, 6])
+		self.delay = 0
+		self.pongDot = 0
 
 	def getBeatAndPower(self, leftAudio, rightAudio):
 		isBeat = False
@@ -54,7 +67,7 @@ class VisuFunctions():
 			self.led.set(i, (int(self.allpoints[i][0]), int(self.allpoints[i][1]), int(self.allpoints[i][2])))
 		self.led.update()
 
-	def __all_off(self):
+	def all_off(self):
 		self.led.all_off()
 		for i in range(leds.numLeds):
 			self.allpoints[i] = [0, 0, 0]
@@ -66,14 +79,16 @@ class VisuFunctions():
 	def render(self, leftAudio, rightAudio, leftBars, rightBars):
 		isBeat, power = self.getBeatAndPower(leftAudio, rightAudio)
 		self.fadeToNextCounter += 1
-		if self.fadeToNextCounter >= shows.SHOW_DURATION:
+		if self.fadeToNextCounter >= shows.SHOW_DURATION and self.frozen == False:
 			self.fadeToNext = True
 
 		self.functionList[self.plan](leftAudio, rightAudio, leftBars, rightBars, isBeat, power)
+		# self.silentList[self.silentPlan]()
 
 		if self.fadeToNext == True:
 			if self.fadeOut() == True:
 				self.plan = (self.plan + 1) % len(self.functionList)
+				self.silentPlan = (self.silentPlan + 1) % len(self.silentList)
 				self.reset()
 				self.maxBrightness = 0
 				self.fadeIntoNext = True
@@ -113,47 +128,41 @@ class VisuFunctions():
 		return delStars
 
 	def activeStars(self, leftAudio, rightAudio, leftBars, rightBars, isBeat, power):
-		if leftBars[0] > 40 or rightBars[0] > 40:
-			self.points.append([[0, led_brightness.LED_FULL_BRIGHT, 0], random.uniform(8, 32), random.randint(0, leds.numLeds)])
-		if leftBars[1] > 30:
-			self.points.append([[led_brightness.LED_FULL_BRIGHT, 0, 0], random.uniform(8, 32), random.randint(0, leds.numLeds)])
-		if leftBars[2] > 30:
-			self.points.append([[0, 0, led_brightness.LED_FULL_BRIGHT], random.uniform(8, 32), random.randint(0, leds.numLeds)])
-		if leftBars[3] > 25:
-			self.points.append([[led_brightness.LED_FULL_BRIGHT, led_brightness.LED_FULL_BRIGHT, 0], random.uniform(8, 32), random.randint(0, leds.numLeds)])
+		if power >= power_cutoffs.HIGH:
+			self.points.append([deepcopy(colors.RED), random.uniform(8, 32), random.randint(0, leds.numLeds-1)])
+		if power >= power_cutoffs.MEDIUM:
+			self.points.append([deepcopy(colors.GREEN), random.uniform(8, 32), random.randint(0, leds.numLeds-1)])
+		if power >= power_cutoffs.LOW:
+			self.points.append([deepcopy(colors.BLUE), random.uniform(8, 32), random.randint(0, leds.numLeds-1)])
 		self.__drawStars(self.points)
 
 	def randomStars(self, leftAudio, rightAudio, leftBars, rightBars, isBeat, power):
-		if leftBars[1] > 30:
-			self.points.append([deepcopy(self.color), random.uniform(8, 32), random.randint(0, leds.numLeds)])
-		if leftBars[1] > 50:
-			self.color = generateBrightColor()
-			self.points.append([deepcopy(self.color), random.uniform(8, 32), random.randint(0, leds.numLeds)])
-			self.points.append([deepcopy(self.color), random.uniform(8, 32), random.randint(0, leds.numLeds)])
-			self.points.append([deepcopy(self.color), random.uniform(8, 32), random.randint(0, leds.numLeds)])
+		if power >= power_cutoffs.LOW:
+			self.points.append([deepcopy(self.color), random.uniform(8, 32), random.randint(0, leds.numLeds-1)])
+		if power > power_cutoffs.MEDIUM:
+			self.points.append([deepcopy(self.color), random.uniform(8, 32), random.randint(0, leds.numLeds-1)])
+		if power > power_cutoffs.HIGH:
+			self.color = generateBrightColor(self.color)
+			self.points.append([deepcopy(self.color), random.uniform(8, 32), random.randint(0, leds.numLeds-1)])
+			self.points.append([deepcopy(self.color), random.uniform(8, 32), random.randint(0, leds.numLeds-1)])
+			self.points.append([deepcopy(self.color), random.uniform(8, 32), random.randint(0, leds.numLeds-1)])
 		self.__drawStars(self.points)
 
 	def rainbowStars(self, leftAudio, rightAudio, leftBars, rightBars, isBeat, power):
 		if isBeat:
 			speed = random.uniform(2, 4)
 			pos = random.randint(0, leds.numLeds)
-			for i in range(random.randint(5, 15)):
+			for i in range(int(power/6)):
 				self.points.append([deepcopy(gradients.RAINBOW[(pos + i) % leds.numLeds]), speed, (pos + i) % leds.numLeds])
 		self.__drawStars(self.points)
 
-	def chillStars(self):
-		while len(self.points) < 15:
-			self.points.append([[1, 1, 1], -random.uniform(.4, 1), random.randint(0, leds.numLeds)])
-		for i in range(len(self.points)-1, -1, -1):
-			if self.points[i][0][0] >= LED_MEDIUM or self.points[i][0][1] >= LED_MEDIUM or self.points[i][0][2] >= LED_MEDIUM:
-				self.points[i][1] = -self.points[i][1]
-		self.__drawStars(self.points)
-
 	def waves(self, leftAudio, rightAudio, leftBars, rightBars, isBeat, power):
-		self.__all_off()
-		if isBeat:
+		self.all_off()
+		self.delay -= 1;
+		if isBeat and self.delay < 0: #There should be at least one space
 			#location, color, quantity, speed, gradient
-			self.points.append([0, generateBrightColor(), random.randint(3, 5), 1, random.randint(0, len(gradient_list.ALL)-1)])
+			self.delay = math.ceil(power/8)
+			self.points.append([0, generateBrightColor(), self.delay, 1, random.randint(0, len(gradient_list.ALL)-1)])
 		i = 0
 		while i < len(self.points):
 			for j in range(self.points[i][2]):
@@ -166,14 +175,9 @@ class VisuFunctions():
 				i -= 1
 			i+=1
 
-	def pulsatingRainbow(self, leftAudio, rightAudio, leftBars, rightBars, isBeat, power):
-		self.delta+=1
-		for i in range(leds.numLeds):
-			self.__setpointcolor(i, deepcopy(gradients.RGB[int((i + self.delta) % len(gradients.RGB))]))
-
 	def miniBars(self, leftAudio, rightAudio, leftBars, rightBars, isBeat, power):
 		self.delta+=.5
-		self.__all_off()
+		self.all_off()
 		if isBeat:
 			self.color = generateBrightColor(self.color)
 		for i in range(3):
@@ -183,7 +187,7 @@ class VisuFunctions():
 			   	self.__setpointcolor(leds.numLeds - (i*int(leds.numLeds/6)) - j - 1, deepcopy(gradients.RAINBOW[int(leds.numLeds - (i*leds.numLeds/6) - j - 1+ self.delta) % len(gradients.RAINBOW)]))
 
 	def movement(self, leftAudio, rightAudio, leftBars, rightBars, isBeat, power):
-		self.__all_off()
+		self.all_off()
 		if self.delta <= 0:
 			self.delta = -.5 - (leftBars[3]/20)
 		else:
@@ -199,12 +203,32 @@ class VisuFunctions():
 				self.__setpointcolor(int(self.locs[i][0]), deepcopy(self.locs[i][1]))
 
 	def megaBar(self, leftAudio, rightAudio, leftBars, rightBars, isBeat, power):
-		self.__all_off()
+		self.all_off()
 		if isBeat:
 			self.color = generateBrightColor(self.color)
 		for i in range(int(leds.numLeds / 2) - (int(max(leftBars[0], leftBars[1]))), int(leds.numLeds / 2) + (int(max(rightBars[0], rightBars[1])))):
 			self.__setpointcolor(i, deepcopy(self.color))
 
+	def pong(self):
+		self.__setpointcolor(int(self.pongDot), [0, 0, 0])
+		self.pongDot += self.delta
+		if self.pongDot >= leds.numLeds-1 or self.pongDot <= 0:
+			self.delta = -self.delta
+			self.color = generateBrightColor(self.color)
+		self.__setpointcolor(int(self.pongDot), deepcopy(self.color))
+
+	def chillStars(self):
+		while len(self.points) < 15:
+			self.points.append([[1, 1, 1], -random.uniform(.4, 1), random.randint(0, leds.numLeds)])
+		for i in range(len(self.points)-1, -1, -1):
+			if self.points[i][0][0] >= led_brightness.LED_MEDIUM or self.points[i][0][1] >= led_brightness.LED_MEDIUM or self.points[i][0][2] >= led_brightness.LED_MEDIUM:
+				self.points[i][1] = -self.points[i][1]
+		self.__drawStars(self.points)
+
+	def pulsatingRainbow(self):
+		self.delta+=1
+		for i in range(leds.numLeds):
+			self.__setpointcolor(i, deepcopy(gradients.RGB[int((i + self.delta) % len(gradients.RGB))]))
 
 class Application(tk.Frame):
 	def __init__(self, master=None):
@@ -220,19 +244,27 @@ class Application(tk.Frame):
 		self.bars = [self.cvs.create_rectangle(0,100*i,100,100*(i+1), fill='#000') for i in range(len(fft.BUCKET_SPLITS_LOCS)-1)]
 
 		self.quit = tk.Button(self, text="QUIT", fg="red", command=root.destroy)
-		self.quit.pack(side="bottom")
+		self.quit.pack(side="left")
+		self.frozen = tk.Checkbutton(self, text="Freeze", onvalue=True, offvalue=False, variable=visu.frozen)
+		self.frozen.pack(side="right")
+		i = 0
+		for f in visu.functionList:
+			tmp = tk.Button(self, text=f.__name__, command=lambda:self.funcClicked(0))
+			tmp.pack(side="right")
+			i += 1
 
 	def drawDualBars(self, leftBars, rightBars):
 		for i in range(len(self.bars)):
 			self.cvs.coords(self.bars[i], 500-leftBars[i], 100*i, 500+rightBars[i], 100*(i+1))
 
-	def printBars(self, bars):
-		l = ''
-		for b in bars:
-			l += ' ' * b
-			l += '#\n'
-		l += '\n\n\n\n\n\n'
-		print(l)
+	def funcClicked(self, i):
+		visu.plan = i
+		print(visu.frozen)
+		visu.frozen = True
+		visu.reset()
+		visu.all_off()
+
+visu = VisuFunctions()
 
 root = tk.Tk()
 root.columnconfigure(0, weight=1)
@@ -241,8 +273,6 @@ root.rowconfigure(0, weight=1)
 app = Application(master=root)
 app.master.title("Visu")
 app.master.minsize(100, 100)
-
-visu = VisuFunctions()
 
 p = pyaudio.PyAudio()
 

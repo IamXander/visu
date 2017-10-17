@@ -11,7 +11,7 @@ class led_brightness:
 	LED_VV_DIM = 10
 	LED_OFF = 0
 
-class power:
+class power_cutoffs:
 	OFF = 0
 	LOW = 15
 	MEDIUM = 30
@@ -19,7 +19,7 @@ class power:
 
 class shows:
 	SWITCH_TIME = 200
-	SHOW_DURATION = 700
+	SHOW_DURATION = 100000
 
 class fft:
 	FREQ = 6
@@ -43,7 +43,7 @@ class fft:
 			i += 1
 
 class leds:
-	numLeds = 60*4
+	numLeds = (60*4)+(60*5)
 
 class colors:
 	RED = [0, 255, 0]

@@ -13,16 +13,28 @@ from bibliopixel.layout import *
 from visu_util import *
 from fakeLed import *
 
+from serial.serialutil import SerialException
+
 VOLUME = 2
 
 class VisuFunctions():
 	def __init__(self):
-		try:
-			driver = Serial(num = leds.numLeds, ledtype = LEDTYPE.WS2812B)
-			self.led = Strip(driver)
-		except ValueError:
-			print("NO LEDS FOUND")
-			self.led = FakeLed()
+		# try:
+		# driverA = Serial(ledtype = LEDTYPE.WS2812B, num = 60*5, dev='COM3', device_id = 0)
+		driverC = Serial(LEDTYPE.WS2812B, 60*5, dev='COM3', device_id = 2)
+		driverB = ''
+		print('here')
+		while driverB == '':
+			try:
+				driverB = Serial(LEDTYPE.WS2812B, 60*5, dev='COM4', device_id = 1)
+			except SerialException:
+				print('Good try')
+		self.led = Strip([driverB, driverC]) #[driverA, driverB, driverC])
+			# driver = Serial(num = leds.numLeds, ledtype = LEDTYPE.WS2812B)
+			# self.led = Strip(driver)
+		# except ValueError:
+			# print("NO LEDS FOUND")
+			# self.led = FakeLed()
 		self.plan = 1
 		self.silentPlan = 1
 		self.fadeToNextPlan = 0
